@@ -7,7 +7,8 @@ use helius::Helius;
 
 use solana_client::rpc_config::RpcBlockConfig;
 use solana_transaction_status::{
-    EncodedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock, UiTransactionStatusMeta,
+    EncodedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock, UiTransactionEncoding,
+    UiTransactionStatusMeta,
 };
 
 // use sandwich_detector::types::{ClassifiedTransaction, Pattern};
@@ -36,14 +37,14 @@ async fn main() -> Result<()> {
 
 async fn get_recent_blocks(helius: &Helius, num_blocks: u64) -> Result<Vec<UiConfirmedBlock>> {
     let current_slot: u64 = helius.connection().get_slot()?;
-    let mut blocks: Vec<solana_transaction_status::UiConfirmedBlock> = Vec::new();
+    let mut blocks: Vec<UiConfirmedBlock> = Vec::new();
 
     let config: RpcBlockConfig = RpcBlockConfig {
         commitment: None,
         max_supported_transaction_version: Some(0),
         transaction_details: Some(TransactionDetails::Full),
         rewards: Some(true),
-        encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
+        encoding: Some(UiTransactionEncoding::Json),
     };
 
     for slot in (current_slot.saturating_sub(num_blocks)..current_slot).rev() {
