@@ -67,6 +67,7 @@ fn is_transaction_successful(meta: &UiTransactionStatusMeta) -> bool {
     }
 }
 
+#[allow(dead_code)]
 async fn analyze_block_transactions(block: &UiConfirmedBlock) -> Result<()> {
     if let Some(transactions) = &block.transactions {
         // Only looking at the first tx to start

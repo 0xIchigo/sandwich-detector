@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub struct ClassifiedTransaction {
     signature: String,
     signer: String,
@@ -6,6 +7,7 @@ pub struct ClassifiedTransaction {
     instruction_type: String,
 }
 
+#[allow(dead_code)]
 pub struct Pattern {
     token: String,
     attacker: String,
