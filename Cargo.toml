@@ -10,4 +10,7 @@ readme = "README.md"
 [dependencies]
 dotenv = "0.15.0"
 helius = "0.2.3"
+solana-client = "2.1.5"
+solana-sdk = "2.1.5"
+solana-transaction-status = "2.1.5"
 tokio = { version = "1.42.0", features = ["full"] }
