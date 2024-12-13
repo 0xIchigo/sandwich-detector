@@ -23,10 +23,11 @@ async fn main() -> Result<()> {
     println!("Successfully created a Helius client");
 
     // Example
-    let recent_blocks: Vec<UiConfirmedBlock> = get_recent_blocks(&helius, 1).await?;
+    let recent_blocks: Vec<UiConfirmedBlock> = get_recent_blocks(&helius, 5).await?;
 
-    if let Some(block) = recent_blocks.first() {
-        println!("Block Analysis (Non-Vote Transactions only):");
+    println!("Analyzing {} blocks", recent_blocks.len());
+    for (i, block) in recent_blocks.iter().enumerate() {
+        println!("\nAnalyzing Block {}:", i + 1);
         analyze_non_vote_transactions(block)?;
     }
 
@@ -82,6 +83,8 @@ async fn analyze_block_transactions(block: &UiConfirmedBlock) -> Result<()> {
 }
 
 fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
+    const TARGET_PROGRAM: &str = "vpeNALD89BZ4KxNUFjdLmFXBCwtyqBDQ85ouNoax38b";
+
     if let Some(transactions) = &block.transactions {
         let non_vote_txs: Vec<&EncodedTransactionWithStatusMeta> = transactions
             .iter()
@@ -92,10 +95,17 @@ fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
                     }
 
                     let logs: Option<Vec<String>> = meta.log_messages.clone().into();
-                    logs.as_ref().map_or(true, |l| {
-                        !l.iter()
-                            .any(|log| log.contains("Vote111111111111111111111111111111111111111"))
-                    })
+
+                    if let Some(logs) = logs {
+                        let is_vote: bool = logs
+                            .iter()
+                            .any(|log| log.contains("Vote111111111111111111111111111111111111111"));
+                        let has_target: bool = logs.iter().any(|log| log.contains(TARGET_PROGRAM));
+
+                        !is_vote && has_target
+                    } else {
+                        false
+                    }
                 } else {
                     // If no meta, treat as non-vote
                     true
@@ -107,16 +117,11 @@ fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
         for (i, tx) in non_vote_txs.iter().enumerate() {
             println!("\nTransaction {}", i + 1);
             if let Some(meta) = &tx.meta {
-                println!("Status: {:?}", meta.status);
-                println!("Fee: {}", meta.fee);
-
                 let logs: Option<Vec<String>> = meta.log_messages.clone().into();
-                if let Some(logs) = logs.as_ref() {
+                if let Some(logs) = logs {
                     println!("Program Invocations:");
                     for log in logs {
-                        if log.contains("invoke") {
-                            println!("  {}", log);
-                        }
+                        println!("  {}", log);
                     }
                 }
             }
