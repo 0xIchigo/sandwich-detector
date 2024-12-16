@@ -1,17 +1,16 @@
 use dotenv::dotenv;
-use solana_sdk::signature::Signature;
-use std::{collections::HashMap, env, str::FromStr};
+use std::{collections::HashMap, env};
 
 use helius::error::Result;
 use helius::types::Cluster;
 use helius::Helius;
 
 use hex::encode;
-use solana_client::rpc_config::{RpcBlockConfig, RpcTransactionConfig};
+use solana_client::rpc_config::RpcBlockConfig;
 use solana_sdk::{message::VersionedMessage, transaction::VersionedTransaction};
 use solana_transaction_status::{
-    EncodedConfirmedTransactionWithStatusMeta, EncodedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock,
-    UiTransactionEncoding, UiTransactionStatusMeta,
+    EncodedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock, UiTransactionEncoding,
+    UiTransactionStatusMeta,
 };
 
 use sandwich_detector::types::{get_instruction_map, TARGET_PROGRAM};
@@ -26,34 +25,20 @@ async fn main() -> Result<()> {
     let helius: Helius = Helius::new(&api_key, cluster).unwrap();
     println!("Successfully created a Helius client");
 
-    let signature: Signature =
-        Signature::from_str("3Z1fWYJmKKsvnYY5BmZxnx4hmDYaPzB8RfH6GXoBy5tjp1JMarGK6xPypCv3D7SW98E761p3mYaUhq1K5JANFWjN")
-            .unwrap();
+    let recent_blocks: Vec<UiConfirmedBlock> = get_recent_blocks(&helius, 5).await?;
+    println!("Analyzing {} blocks", recent_blocks.len());
 
-    let config: RpcTransactionConfig = RpcTransactionConfig {
-        encoding: Some(UiTransactionEncoding::Base64),
-        commitment: None,
-        max_supported_transaction_version: Some(0),
-    };
-
-    let tx_with_meta: EncodedConfirmedTransactionWithStatusMeta = helius
-        .connection()
-        .get_transaction_with_config(&signature, config)
-        .unwrap();
-
-    // Check if the transaction has an AutoSwapIn instruction
-    if let Some(instruction_name) = find_known_instruction(&tx_with_meta) {
-        println!("This transaction contains a known instruction: {}", instruction_name)
-    } else {
-        println!("No known instructions found in this transaction")
+    for (i, block) in recent_blocks.iter().enumerate() {
+        println!("\nAnalyzing Block {}:", i + 1);
+        analyze_non_vote_transactions(block)?;
     }
 
     Ok(())
 }
 
 // Checks if a given transaction contains a known instructions
-fn find_known_instruction(tx_with_meta: &EncodedConfirmedTransactionWithStatusMeta) -> Option<&'static str> {
-    let versioned_tx: VersionedTransaction = match tx_with_meta.transaction.transaction.decode() {
+fn find_known_instruction(tx_with_meta: &EncodedTransactionWithStatusMeta) -> Option<&'static str> {
+    let versioned_tx: VersionedTransaction = match tx_with_meta.transaction.decode() {
         Some(tx) => tx,
         None => return None,
     };
@@ -86,7 +71,6 @@ fn find_known_instruction(tx_with_meta: &EncodedConfirmedTransactionWithStatusMe
     None
 }
 
-#[allow(dead_code)]
 async fn get_recent_blocks(helius: &Helius, num_blocks: u64) -> Result<Vec<UiConfirmedBlock>> {
     let current_slot: u64 = helius.connection().get_slot()?;
     let mut blocks: Vec<UiConfirmedBlock> = Vec::new();
@@ -96,7 +80,7 @@ async fn get_recent_blocks(helius: &Helius, num_blocks: u64) -> Result<Vec<UiCon
         max_supported_transaction_version: Some(0),
         transaction_details: Some(TransactionDetails::Full),
         rewards: Some(true),
-        encoding: Some(UiTransactionEncoding::Json),
+        encoding: Some(UiTransactionEncoding::Base64),
     };
 
     for slot in (current_slot.saturating_sub(num_blocks)..current_slot).rev() {
@@ -114,7 +98,6 @@ async fn get_recent_blocks(helius: &Helius, num_blocks: u64) -> Result<Vec<UiCon
     Ok(blocks)
 }
 
-#[allow(dead_code)]
 fn is_transaction_successful(meta: &UiTransactionStatusMeta) -> bool {
     match meta.err {
         None => true,
@@ -136,10 +119,7 @@ async fn analyze_block_transactions(block: &UiConfirmedBlock) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
 fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
-    const TARGET_PROGRAM: &str = "vpeNALD89BZ4KxNUFjdLmFXBCwtyqBDQ85ouNoax38b";
-
     if let Some(transactions) = &block.transactions {
         let non_vote_txs: Vec<&EncodedTransactionWithStatusMeta> = transactions
             .iter()
@@ -168,17 +148,12 @@ fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
             })
             .collect();
 
-        // Print details of each non-vote transaction
-        for (i, tx) in non_vote_txs.iter().enumerate() {
-            println!("\nTransaction {}", i + 1);
-            if let Some(meta) = &tx.meta {
-                let logs: Option<Vec<String>> = meta.log_messages.clone().into();
-                if let Some(logs) = logs {
-                    println!("Program Invocations:");
-                    for log in logs {
-                        println!("  {}", log);
-                    }
-                }
+        for (_i, tx) in non_vote_txs.iter().enumerate() {
+            // Check if this transaction contains a known transaction
+            if let Some(instruction_name) = find_known_instruction(tx) {
+                println!("Found known instruction: {}", instruction_name);
+            } else {
+                println!("No known instructions found in this transaction");
             }
         }
     } else {
