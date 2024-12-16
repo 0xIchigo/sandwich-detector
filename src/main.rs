@@ -1,6 +1,6 @@
 use dotenv::dotenv;
 use solana_sdk::signature::Signature;
-use std::{env, str::FromStr};
+use std::{collections::HashMap, env, str::FromStr};
 
 use helius::error::Result;
 use helius::types::Cluster;
@@ -13,6 +13,8 @@ use solana_transaction_status::{
     EncodedConfirmedTransactionWithStatusMeta, EncodedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock,
     UiTransactionEncoding, UiTransactionStatusMeta,
 };
+
+use sandwich_detector::types::{get_instruction_map, TARGET_PROGRAM};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,46 +42,44 @@ async fn main() -> Result<()> {
         .unwrap();
 
     // Check if the transaction has an AutoSwapIn instruction
-    if has_autoswap_in(&tx_with_meta) {
-        println!("This transaction contains an AutoSwapIn instruction!")
+    if let Some(instruction_name) = find_known_instruction(&tx_with_meta) {
+        println!("This transaction contains a known instruction: {}", instruction_name)
     } else {
-        println!("No AutoSwapIn instruction found in this transaction")
+        println!("No known instructions found in this transaction")
     }
 
     Ok(())
 }
 
-// Checks if a transaction contains an AutoSwapIn instruction
-fn has_autoswap_in(tx_with_meta: &EncodedConfirmedTransactionWithStatusMeta) -> bool {
-    const TARGET_PROGRAM: &str = "vpeNALD89BZ4KxNUFjdLmFXBCwtyqBDQ85ouNoax38b";
-    const AUTOSWAP_IN_DISCRIMINATOR: &str = "5bb527f9eccb5e90";
-
+// Checks if a given transaction contains a known instructions
+fn find_known_instruction(tx_with_meta: &EncodedConfirmedTransactionWithStatusMeta) -> Option<&'static str> {
     let versioned_tx: VersionedTransaction = match tx_with_meta.transaction.transaction.decode() {
         Some(tx) => tx,
-        None => return false,
+        None => return None,
     };
+
+    let instruction_map: HashMap<&str, &str> = get_instruction_map();
 
     let (account_keys, instructions) = match &versioned_tx.message {
         VersionedMessage::Legacy(msg) => (msg.account_keys.clone(), msg.instructions.clone()),
         VersionedMessage::V0(msg) => (msg.account_keys.clone(), msg.instructions.clone()),
     };
 
-    let target_program_idx: usize = match account_keys.iter().position(|key| key.to_string() == TARGET_PROGRAM) {
-        Some(idx) => idx,
-        None => return false,
-    };
+    let target_program_idx: Option<usize> = account_keys.iter().position(|key| key.to_string() == TARGET_PROGRAM);
 
     for ix in &instructions {
-        if ix.program_id_index as usize == target_program_idx {
+        if ix.program_id_index as usize == target_program_idx.unwrap_or_default() {
             let hex_data = hex::encode(&ix.data);
 
-            if hex_data.contains(AUTOSWAP_IN_DISCRIMINATOR) {
-                return true;
+            for (discriminator, name) in &instruction_map {
+                if hex_data.contains(discriminator) {
+                    return Some(name);
+                }
             }
         }
     }
 
-    false
+    None
 }
 
 #[allow(dead_code)]
