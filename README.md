@@ -11,7 +11,7 @@ A sandwich attack is a form of market manipulation and front-running that primar
 There are several ways to execute sandwich attacks on Solana, with the most popular method being with Jito bundles. MEV bots, such as the infamous "arsc," have been highly successful in executing sandwich attacks on Solana. Moreover, since Solana lacks a public mempool, certain validators run private mempools that allow them to monitor and exploit pending transactions for sandwich attacks.
 
 ## Disclaimer
-This tool attempts to identify potential sandwich attacks on Solana. However, due to the complex nature of transactions, there may be false positives or missed detections. Users should perform their own verification and not rely solely on this tool for trading decisions and/or research.
+This tool attempts to identify potential sandwich attacks on Solana. However, due to the complex nature of these transactions, there may be false positives or missed detections. Users should perform their own verification and not rely solely on this tool for trading decisions and/or research.
 
 ## License
 The following code is provided as is under an [MIT license](https://github.com/0xIchigo/sandwich-detector/blob/main/LICENSE)
