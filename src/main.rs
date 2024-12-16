@@ -6,7 +6,7 @@ use helius::error::Result;
 use helius::types::Cluster;
 use helius::Helius;
 
-use hex;
+use hex::encode;
 use solana_client::rpc_config::{RpcBlockConfig, RpcTransactionConfig};
 use solana_sdk::{message::VersionedMessage, transaction::VersionedTransaction};
 use solana_transaction_status::{
@@ -69,12 +69,16 @@ fn find_known_instruction(tx_with_meta: &EncodedConfirmedTransactionWithStatusMe
 
     for ix in &instructions {
         if ix.program_id_index as usize == target_program_idx.unwrap_or_default() {
-            let hex_data = hex::encode(&ix.data);
+            // Ensure the instruction data is at least 8 bytes so we can extract the discriminator
+            if ix.data.len() < 8 {
+                continue;
+            }
 
-            for (discriminator, name) in &instruction_map {
-                if hex_data.contains(discriminator) {
-                    return Some(name);
-                }
+            let discriminator_bytes: &[u8] = &ix.data[0..8];
+            let hex_data: String = encode(discriminator_bytes);
+
+            if let Some(name) = instruction_map.get(hex_data.as_str()) {
+                return Some(name);
             }
         }
     }
