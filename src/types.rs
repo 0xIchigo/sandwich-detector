@@ -9,7 +9,7 @@ pub struct ClassifiedTransaction {
     from_mint: String,
     to_mint: String,
     from_amount: u64,
-    to_amount: u64
+    to_amount: u64,
 }
 
 #[allow(dead_code)]

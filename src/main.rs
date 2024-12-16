@@ -1,17 +1,18 @@
 use dotenv::dotenv;
-use std::env;
+use solana_sdk::signature::Signature;
+use std::{env, str::FromStr};
 
 use helius::error::Result;
 use helius::types::Cluster;
 use helius::Helius;
 
-use solana_client::rpc_config::RpcBlockConfig;
+use hex;
+use solana_client::rpc_config::{RpcBlockConfig, RpcTransactionConfig};
+use solana_sdk::{message::VersionedMessage, transaction::VersionedTransaction};
 use solana_transaction_status::{
-    EncodedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock, UiTransactionEncoding,
-    UiTransactionStatusMeta,
+    EncodedConfirmedTransactionWithStatusMeta, EncodedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock,
+    UiTransactionEncoding, UiTransactionStatusMeta,
 };
-
-// use sandwich_detector::types::{ClassifiedTransaction, Pattern};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,18 +24,65 @@ async fn main() -> Result<()> {
     let helius: Helius = Helius::new(&api_key, cluster).unwrap();
     println!("Successfully created a Helius client");
 
-    // Example
-    let recent_blocks: Vec<UiConfirmedBlock> = get_recent_blocks(&helius, 5).await?;
+    let signature: Signature =
+        Signature::from_str("3Z1fWYJmKKsvnYY5BmZxnx4hmDYaPzB8RfH6GXoBy5tjp1JMarGK6xPypCv3D7SW98E761p3mYaUhq1K5JANFWjN")
+            .unwrap();
 
-    println!("Analyzing {} blocks", recent_blocks.len());
-    for (i, block) in recent_blocks.iter().enumerate() {
-        println!("\nAnalyzing Block {}:", i + 1);
-        analyze_non_vote_transactions(block)?;
+    let config: RpcTransactionConfig = RpcTransactionConfig {
+        encoding: Some(UiTransactionEncoding::Base64),
+        commitment: None,
+        max_supported_transaction_version: Some(0),
+    };
+
+    let tx_with_meta: EncodedConfirmedTransactionWithStatusMeta = helius
+        .connection()
+        .get_transaction_with_config(&signature, config)
+        .unwrap();
+
+    // Check if the transaction has an AutoSwapIn instruction
+    if has_autoswap_in(&tx_with_meta) {
+        println!("This transaction contains an AutoSwapIn instruction!")
+    } else {
+        println!("No AutoSwapIn instruction found in this transaction")
     }
 
     Ok(())
 }
 
+// Checks if a transaction contains an AutoSwapIn instruction
+fn has_autoswap_in(tx_with_meta: &EncodedConfirmedTransactionWithStatusMeta) -> bool {
+    const TARGET_PROGRAM: &str = "vpeNALD89BZ4KxNUFjdLmFXBCwtyqBDQ85ouNoax38b";
+    const AUTOSWAP_IN_DISCRIMINATOR: &str = "5bb527f9eccb5e90";
+
+    let versioned_tx: VersionedTransaction = match tx_with_meta.transaction.transaction.decode() {
+        Some(tx) => tx,
+        None => return false,
+    };
+
+    let (account_keys, instructions) = match &versioned_tx.message {
+        VersionedMessage::Legacy(msg) => (msg.account_keys.clone(), msg.instructions.clone()),
+        VersionedMessage::V0(msg) => (msg.account_keys.clone(), msg.instructions.clone()),
+    };
+
+    let target_program_idx: usize = match account_keys.iter().position(|key| key.to_string() == TARGET_PROGRAM) {
+        Some(idx) => idx,
+        None => return false,
+    };
+
+    for ix in &instructions {
+        if ix.program_id_index as usize == target_program_idx {
+            let hex_data = hex::encode(&ix.data);
+
+            if hex_data.contains(AUTOSWAP_IN_DISCRIMINATOR) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+#[allow(dead_code)]
 async fn get_recent_blocks(helius: &Helius, num_blocks: u64) -> Result<Vec<UiConfirmedBlock>> {
     let current_slot: u64 = helius.connection().get_slot()?;
     let mut blocks: Vec<UiConfirmedBlock> = Vec::new();
@@ -62,6 +110,7 @@ async fn get_recent_blocks(helius: &Helius, num_blocks: u64) -> Result<Vec<UiCon
     Ok(blocks)
 }
 
+#[allow(dead_code)]
 fn is_transaction_successful(meta: &UiTransactionStatusMeta) -> bool {
     match meta.err {
         None => true,
@@ -83,6 +132,7 @@ async fn analyze_block_transactions(block: &UiConfirmedBlock) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
     const TARGET_PROGRAM: &str = "vpeNALD89BZ4KxNUFjdLmFXBCwtyqBDQ85ouNoax38b";
 
