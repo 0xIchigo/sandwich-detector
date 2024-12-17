@@ -36,8 +36,8 @@ pub struct ClassifiedTransaction {
 
 #[allow(dead_code)]
 pub struct Pattern {
-    token: String,
-    attacker: String,
-    victim: String,
-    transactions: (ClassifiedTransaction, ClassifiedTransaction, ClassifiedTransaction),
+    pub token: String,
+    pub attacker: String,
+    pub victim: Option<String>,
+    pub transactions: (ClassifiedTransaction, ClassifiedTransaction, ClassifiedTransaction),
 }
