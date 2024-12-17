@@ -159,11 +159,9 @@ async fn get_recent_blocks(helius: &Helius, num_blocks: u64) -> Result<Vec<UiCon
     Ok(blocks)
 }
 
+// Checks whether a given transaction was successful
 fn is_transaction_successful(meta: &UiTransactionStatusMeta) -> bool {
-    match meta.err {
-        None => true,
-        Some(_) => false,
-    }
+    meta.err.is_none()
 }
 
 // Checks if an address is a Jito tip address
@@ -188,20 +186,7 @@ fn detect_jito_tip(account_keys: &[Pubkey], pre_balances: &[u64], post_balances:
     total_tip
 }
 
-#[allow(dead_code)]
-async fn analyze_block_transactions(block: &UiConfirmedBlock) -> Result<()> {
-    if let Some(transactions) = &block.transactions {
-        // Only looking at the first tx to start
-        if let Some(first_tx) = transactions.first() {
-            println!("{:?}", first_tx)
-        }
-    } else {
-        println!("No transactions found in this block");
-    }
-
-    Ok(())
-}
-
+// Checks non-vote transactions in a block for potential sandwich attacks
 fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
     if let Some(transactions) = &block.transactions {
         let non_vote_txs: Vec<&EncodedTransactionWithStatusMeta> = transactions
