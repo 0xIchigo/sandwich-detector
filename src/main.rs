@@ -13,7 +13,7 @@ use solana_transaction_status::{
     UiTransactionStatusMeta,
 };
 
-use sandwich_detector::types::{get_instruction_map, TARGET_PROGRAM};
+use sandwich_detector::types::{get_instruction_map, ClassifiedTransaction, TARGET_PROGRAM};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,10 +37,14 @@ async fn main() -> Result<()> {
 }
 
 // Checks if a given transaction contains a known instructions
-fn find_known_instruction(tx_with_meta: &EncodedTransactionWithStatusMeta) -> Option<&'static str> {
+fn find_known_instruction(
+    tx_with_meta: &EncodedTransactionWithStatusMeta,
+    slot: u64,
+    block_time: Option<u64>,
+) -> Vec<ClassifiedTransaction> {
     let versioned_tx: VersionedTransaction = match tx_with_meta.transaction.decode() {
         Some(tx) => tx,
-        None => return None,
+        None => return vec![],
     };
 
     let instruction_map: HashMap<&str, &str> = get_instruction_map();
@@ -50,7 +54,24 @@ fn find_known_instruction(tx_with_meta: &EncodedTransactionWithStatusMeta) -> Op
         VersionedMessage::V0(msg) => (msg.account_keys.clone(), msg.instructions.clone()),
     };
 
+    let signature: String = if !versioned_tx.signatures.is_empty() {
+        versioned_tx.signatures[0].to_string()
+    } else {
+        "".to_string()
+    };
+
+    let signer: String = {
+        let num_signers = versioned_tx.message.header().num_required_signatures as usize;
+
+        if num_signers > 0 && account_keys.len() >= num_signers {
+            account_keys[0].to_string()
+        } else {
+            "".to_string()
+        }
+    };
+
     let target_program_idx: Option<usize> = account_keys.iter().position(|key| key.to_string() == TARGET_PROGRAM);
+    let mut found_txs = Vec::new();
 
     for ix in &instructions {
         if ix.program_id_index as usize == target_program_idx.unwrap_or_default() {
@@ -63,12 +84,50 @@ fn find_known_instruction(tx_with_meta: &EncodedTransactionWithStatusMeta) -> Op
             let hex_data: String = encode(discriminator_bytes);
 
             if let Some(name) = instruction_map.get(hex_data.as_str()) {
-                return Some(name);
+                // Setting to default values for now
+                let mut sandwich_acc: String = "".to_string();
+                let from_mint: String = "".to_string();
+                let to_mint: String = "".to_string();
+                let from_amount: u64 = 0;
+                let to_amount: u64 = 0;
+
+                match *name {
+                    "CreateSandwichV2" => {
+                        if ix.accounts.len() > 2 {
+                            sandwich_acc = account_keys[ix.accounts[2] as usize].to_string();
+                        }
+                    }
+                    "AutoSwapIn" | "AutoSwapOut" => {
+                        if ix.accounts.len() > 6 {
+                            sandwich_acc = account_keys[ix.accounts[6] as usize].to_string();
+                        } else if ix.accounts.len() > 7 {
+                            sandwich_acc = account_keys[ix.accounts[7] as usize].to_string();
+                        }
+                    }
+                    // Decode the to/from mints here
+                    // For now, we'll leave it empty
+                    _ => {}
+                }
+
+                let classified_tx: ClassifiedTransaction = ClassifiedTransaction {
+                    signature: signature.clone(),
+                    signer: signer.clone(),
+                    slot,
+                    block_time,
+                    instruction_type: name.to_string(),
+                    sandwich_acc,
+                    from_mint,
+                    to_mint,
+                    from_amount,
+                    to_amount,
+                };
+
+                found_txs.push(classified_tx);
             }
         }
     }
 
-    None
+    found_txs
 }
 
 async fn get_recent_blocks(helius: &Helius, num_blocks: u64) -> Result<Vec<UiConfirmedBlock>> {
@@ -148,12 +207,16 @@ fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
             })
             .collect();
 
+        let slot: u64 = block.block_height.unwrap_or(0);
+        let block_time: Option<u64> = block.block_time.map(|x| x as u64);
+
         for (_i, tx) in non_vote_txs.iter().enumerate() {
-            // Check if this transaction contains a known transaction
-            if let Some(instruction_name) = find_known_instruction(tx) {
-                println!("Found known instruction: {}", instruction_name);
-            } else {
-                println!("No known instructions found in this transaction");
+            let classified_txs: Vec<ClassifiedTransaction> = find_known_instruction(tx, slot, block_time);
+            for classified_tx in classified_txs {
+                println!(
+                    "Found known instruction: {} with sandwich_acc: {}",
+                    classified_tx.instruction_type, classified_tx.sandwich_acc
+                );
             }
         }
     } else {

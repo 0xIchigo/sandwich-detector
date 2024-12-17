@@ -21,18 +21,17 @@ pub fn get_instruction_map() -> HashMap<&'static str, &'static str> {
     m
 }
 
-#[allow(dead_code)]
 pub struct ClassifiedTransaction {
-    signature: String,
-    signer: String,
-    slot: u64,
-    block_time: Option<u64>,
-    instruction_type: String,
-    sandwich_acc: String,
-    from_mint: String,
-    to_mint: String,
-    from_amount: u64,
-    to_amount: u64,
+    pub signature: String,
+    pub signer: String,
+    pub slot: u64,
+    pub block_time: Option<u64>,
+    pub instruction_type: String,
+    pub sandwich_acc: String,
+    pub from_mint: String,
+    pub to_mint: String,
+    pub from_amount: u64,
+    pub to_amount: u64,
 }
 
 #[allow(dead_code)]
