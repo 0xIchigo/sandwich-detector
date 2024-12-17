@@ -7,13 +7,15 @@ use helius::Helius;
 
 use hex::encode;
 use solana_client::rpc_config::RpcBlockConfig;
-use solana_sdk::{message::VersionedMessage, transaction::VersionedTransaction};
+use solana_sdk::{message::VersionedMessage, pubkey::Pubkey, transaction::VersionedTransaction};
 use solana_transaction_status::{
     EncodedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock, UiTransactionEncoding,
     UiTransactionStatusMeta,
 };
 
-use sandwich_detector::types::{get_instruction_map, ClassifiedTransaction, TARGET_PROGRAM};
+use sandwich_detector::types::{
+    get_instruction_map, ClassifiedTransaction, JITO_TIP_ADDRESSES, MIN_JITO_TIP, TARGET_PROGRAM,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -164,6 +166,28 @@ fn is_transaction_successful(meta: &UiTransactionStatusMeta) -> bool {
     }
 }
 
+// Checks if an address is a Jito tip address
+#[allow(dead_code)]
+fn is_jito_tip_address(addr: &str) -> bool {
+    JITO_TIP_ADDRESSES.contains(&addr)
+}
+
+// Checks Jito tups by comparing pre- and post-balances
+#[allow(dead_code)]
+fn detect_jito_tip(account_keys: &[Pubkey], pre_balances: &[u64], post_balances: &[u64]) -> u64 {
+    let mut total_tip: u64 = 0;
+
+    for (i, key) in account_keys.iter().enumerate() {
+        let diff: u64 = post_balances[i].saturating_sub(pre_balances[i]);
+
+        if diff >= MIN_JITO_TIP && is_jito_tip_address(&key.to_string()) {
+            total_tip += diff;
+        }
+    }
+
+    total_tip
+}
+
 #[allow(dead_code)]
 async fn analyze_block_transactions(block: &UiConfirmedBlock) -> Result<()> {
     if let Some(transactions) = &block.transactions {
@@ -213,10 +237,12 @@ fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
         for (_i, tx) in non_vote_txs.iter().enumerate() {
             let classified_txs: Vec<ClassifiedTransaction> = find_known_instruction(tx, slot, block_time);
             for classified_tx in classified_txs {
-                println!(
-                    "Found known instruction: {} with sandwich_acc: {}",
-                    classified_tx.instruction_type, classified_tx.sandwich_acc
-                );
+                // println!(
+                //     "Found known instruction: {} with sandwich_acc: {}",
+                //     classified_tx.instruction_type, classified_tx.sandwich_acc
+                // );
+                println!("{}", serde_json::to_string_pretty(&classified_tx).unwrap());
+                println!("Sus transaction: {}", serde_json::to_string_pretty(&tx).unwrap());
             }
         }
     } else {
