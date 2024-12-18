@@ -19,7 +19,8 @@ use solana_transaction_status::{
 };
 
 use sandwich_detector::types::{
-    get_instruction_map, ClassifiedTransaction, SwapInfo, JITO_TIP_ADDRESSES, MIN_JITO_TIP, TARGET_PROGRAM,
+    get_instruction_map, ClassifiedTransaction, PatternTracker, SwapInfo, JITO_TIP_ADDRESSES, MIN_JITO_TIP,
+    TARGET_PROGRAM,
 };
 
 #[tokio::main]
@@ -32,7 +33,7 @@ async fn main() -> Result<()> {
     let helius: Helius = Helius::new(&api_key, cluster).unwrap();
     println!("Successfully created a Helius client");
 
-    let recent_blocks: Vec<UiConfirmedBlock> = get_recent_blocks(&helius, 1).await?;
+    let recent_blocks: Vec<UiConfirmedBlock> = get_recent_blocks(&helius, 5).await?;
     println!("Analyzing {} blocks", recent_blocks.len());
 
     for (i, block) in recent_blocks.iter().enumerate() {
@@ -346,6 +347,8 @@ fn detect_jito_tip(account_keys: &[Pubkey], pre_balances: &[u64], post_balances:
 // Checks non-vote transactions in a block for potential sandwich attacks
 fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
     if let Some(transactions) = &block.transactions {
+        let mut pattern_tracker: PatternTracker = PatternTracker::new();
+
         let non_vote_txs: Vec<&EncodedTransactionWithStatusMeta> = transactions
             .iter()
             .filter(|tx| {
@@ -357,18 +360,17 @@ fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
                     let logs: Option<Vec<String>> = meta.log_messages.clone().into();
 
                     if let Some(logs) = logs {
-                        let is_vote: bool = logs
+                        let is_vote = logs
                             .iter()
                             .any(|log| log.contains("Vote111111111111111111111111111111111111111"));
-                        let has_target: bool = logs.iter().any(|log| log.contains(TARGET_PROGRAM));
+                        let has_target = logs.iter().any(|log| log.contains(TARGET_PROGRAM));
 
                         !is_vote && has_target
                     } else {
                         false
                     }
                 } else {
-                    // If no meta, treat as non-vote
-                    true
+                    false
                 }
             })
             .collect();
@@ -376,16 +378,35 @@ fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
         let slot: u64 = block.block_height.unwrap_or(0);
         let block_time: Option<u64> = block.block_time.map(|x| x as u64);
 
+        // Process all transactions
         for tx in non_vote_txs {
-            let classified_txs: Vec<ClassifiedTransaction> = find_known_instruction(tx, slot, block_time);
+            let classified_txs = find_known_instruction(tx, slot, block_time);
 
-            for classified_tx in &classified_txs {
-                // Print the classified transaction as pretty JSON
+            for classified_tx in classified_txs {
+                // Print individual transaction
+                println!("Transaction detected:");
                 println!("{}", serde_json::to_string_pretty(&classified_tx).unwrap());
-                // If a Jito tip was detected, print it
-                if classified_tx.jito_tip_amount > 0 {
-                    //println!("Jito tip detected: {} lamports", classified_tx.jito_tip_amount);
+
+                // Add to pattern tracker
+                pattern_tracker.process_transaction(classified_tx);
+            }
+        }
+
+        // Print completed patterns
+        let completed_patterns = pattern_tracker.get_completed_patterns();
+        if !completed_patterns.is_empty() {
+            println!("\nFound {} sandwich patterns in this block:", completed_patterns.len());
+
+            for (i, pattern) in completed_patterns.iter().enumerate() {
+                println!("\nPattern {}:", i + 1);
+                println!("Token: {}", pattern.token);
+                println!("Attacker: {}", pattern.attacker);
+                if let Some(victim) = &pattern.victim {
+                    println!("Victim: {}", victim);
                 }
+                println!("Create TX: {}", pattern.transactions.0.signature);
+                println!("Swap In TX: {}", pattern.transactions.1.signature);
+                println!("Swap Out TX: {}", pattern.transactions.2.signature);
             }
         }
     } else {

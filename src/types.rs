@@ -69,14 +69,6 @@ impl ClassifiedTransaction {
     }
 }
 
-#[allow(dead_code)]
-pub struct Pattern {
-    pub token: String,
-    pub attacker: String,
-    pub victim: Option<String>,
-    pub transactions: (ClassifiedTransaction, ClassifiedTransaction, ClassifiedTransaction),
-}
-
 #[derive(Debug, Serialize)]
 pub struct SwapInfo {
     pub swapper: String,
@@ -95,5 +87,177 @@ impl SwapInfo {
             from_amount: 0,
             to_amount: 0,
         }
+    }
+}
+
+pub struct Pattern {
+    pub token: String,
+    pub attacker: String,
+    pub victim: Option<String>,
+    pub transactions: (ClassifiedTransaction, ClassifiedTransaction, ClassifiedTransaction),
+}
+
+impl Pattern {
+    // Creates a new pattern from its component transactions
+    pub fn new(
+        create_tx: ClassifiedTransaction,
+        swap_in_tx: ClassifiedTransaction,
+        swap_out_tx: ClassifiedTransaction,
+    ) -> Option<Self> {
+        // Validate that all transactions have the same sandwich_acc
+        if create_tx.sandwich_acc != swap_in_tx.sandwich_acc || swap_in_tx.sandwich_acc != swap_out_tx.sandwich_acc {
+            return None;
+        }
+
+        // Validate the proper transaction sequence
+        if create_tx.block_time > swap_in_tx.block_time || swap_in_tx.block_time > swap_out_tx.block_time {
+            return None;
+        }
+
+        // Get the proper token from the swap transactions
+        let token: String = if !swap_in_tx.from_mint.is_empty() {
+            swap_in_tx.from_mint.clone()
+        } else if !swap_out_tx.from_mint.is_empty() {
+            swap_out_tx.from_mint.clone()
+        } else {
+            return None;
+        };
+
+        Some(Self {
+            token,
+            attacker: create_tx.signer.clone(),
+            victim: Some(swap_in_tx.swapper.clone()),
+            transactions: (create_tx, swap_in_tx, swap_out_tx),
+        })
+    }
+
+    // Returns true if this is a profitable sandwich attack
+    pub fn is_profitable(&self) -> bool {
+        let (_, swap_in, swap_out) = &self.transactions;
+
+        // Check if we have both swap amounts
+        if swap_in.from_amount == 0 || swap_out.from_amount == 0 {
+            return false;
+        }
+
+        swap_out.from_amount > swap_in.from_amount
+    }
+
+    /// Returns true if this is a complete and valid sandwich attack pattern
+    pub fn is_valid(&self) -> bool {
+        let (create_tx, swap_in_tx, swap_out_tx) = &self.transactions;
+
+        // Validate that all transactions use the same sandwich account
+        if create_tx.sandwich_acc != swap_in_tx.sandwich_acc || swap_in_tx.sandwich_acc != swap_out_tx.sandwich_acc {
+            return false;
+        }
+
+        // Validate transaction sequence is in the same block
+        if create_tx.slot != swap_in_tx.slot || swap_in_tx.slot != swap_out_tx.slot {
+            return false;
+        }
+
+        // Validate we have valid swap info for both swaps
+        // if swap_in_tx.from_mint.is_empty() || swap_out_tx.from_mint.is_empty() {
+        //     return false;
+        // }
+
+        // Validate it's the same token
+        if swap_in_tx.from_mint != swap_in_tx.to_mint || swap_out_tx.from_mint != swap_out_tx.to_mint {
+            return false;
+        }
+
+        true
+    }
+
+    /// Returns the profit amount (positive means profitable)
+    pub fn get_profit(&self) -> i128 {
+        let (_, swap_in, swap_out) = &self.transactions;
+
+        if !self.is_valid() {
+            return 0;
+        }
+
+        swap_out.from_amount as i128 - swap_in.from_amount as i128
+    }
+
+    /// Returns a formatted string summarizing the pattern
+    pub fn to_summary(&self) -> String {
+        let profit = self.get_profit();
+        let token_decimals = 6; // Most Solana tokens use 6 decimals
+        let formatted_profit = profit as f64 / 10f64.powi(token_decimals);
+
+        format!(
+            "Sandwich Attack Pattern:\n\
+             Token: {}\n\
+             Profit: {} tokens\n\
+             Attacker: {}\n\
+             Victim: {}\n\
+             Block: {}\n\
+             Transactions:\n\
+             - Create: {}\n\
+             - Swap In: {} (amount: {})\n\
+             - Swap Out: {} (amount: {})\n\
+             Jito Tips Paid: {}\n",
+            self.transactions.1.from_mint,
+            formatted_profit,
+            self.attacker,
+            self.victim.as_ref().unwrap_or(&String::from("Unknown")),
+            self.transactions.0.slot,
+            self.transactions.0.signature,
+            self.transactions.1.signature,
+            self.transactions.1.from_amount,
+            self.transactions.2.signature,
+            self.transactions.2.from_amount,
+            self.transactions.2.jito_tip_amount,
+        )
+    }
+}
+
+/// Tracks potential sandwich attacks in progress
+#[derive(Default)]
+pub struct PatternTracker {
+    // Map of sandwich_acc -> create transaction
+    open_positions: HashMap<String, ClassifiedTransaction>,
+    // Map of sandwich_acc -> (create_tx, swap_in_tx)
+    in_progress: HashMap<String, (ClassifiedTransaction, ClassifiedTransaction)>,
+    // Completed patterns
+    completed: Vec<Pattern>,
+}
+
+impl PatternTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn process_transaction(&mut self, tx: ClassifiedTransaction) {
+        match tx.instruction_type.as_str() {
+            "CreateSandwichV2" => {
+                self.open_positions.insert(tx.sandwich_acc.clone(), tx);
+            }
+            "AutoSwapIn" => {
+                if let Some(create_tx) = self.open_positions.remove(&tx.sandwich_acc) {
+                    self.in_progress.insert(tx.sandwich_acc.clone(), (create_tx, tx));
+                }
+            }
+            "AutoSwapOut" => {
+                if let Some((create_tx, swap_in_tx)) = self.in_progress.remove(&tx.sandwich_acc) {
+                    if let Some(pattern) = Pattern::new(create_tx, swap_in_tx, tx) {
+                        if pattern.is_profitable() {
+                            self.completed.push(pattern);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn get_completed_patterns(&self) -> &[Pattern] {
+        &self.completed
+    }
+
+    pub fn clear_completed(&mut self) {
+        self.completed.clear();
     }
 }
