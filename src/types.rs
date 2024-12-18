@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -157,11 +158,6 @@ impl Pattern {
             return false;
         }
 
-        // Validate we have valid swap info for both swaps
-        // if swap_in_tx.from_mint.is_empty() || swap_out_tx.from_mint.is_empty() {
-        //     return false;
-        // }
-
         // Validate it's the same token
         if swap_in_tx.from_mint != swap_in_tx.to_mint || swap_out_tx.from_mint != swap_out_tx.to_mint {
             return false;
@@ -170,7 +166,7 @@ impl Pattern {
         true
     }
 
-    /// Returns the profit amount (positive means profitable)
+    // Returns the profit amount (positive means profitable)
     pub fn get_profit(&self) -> i128 {
         let (_, swap_in, swap_out) = &self.transactions;
 
@@ -181,11 +177,19 @@ impl Pattern {
         swap_out.from_amount as i128 - swap_in.from_amount as i128
     }
 
-    /// Returns a formatted string summarizing the pattern
+    // Returns a formatted string summarizing the pattern
     pub fn to_summary(&self) -> String {
-        let profit = self.get_profit();
-        let token_decimals = 6; // Most Solana tokens use 6 decimals
-        let formatted_profit = profit as f64 / 10f64.powi(token_decimals);
+        let profit: i128 = self.get_profit();
+        let time_str = self
+            .transactions
+            .0
+            .block_time
+            .map(|t| {
+                DateTime::<Utc>::from_timestamp(t as i64, 0)
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                    .unwrap_or_else(|| "Invalid timestamp".to_string())
+            })
+            .unwrap_or_else(|| "Unknown".to_string());
 
         format!(
             "Sandwich Attack Pattern:\n\
@@ -194,16 +198,18 @@ impl Pattern {
              Attacker: {}\n\
              Victim: {}\n\
              Block: {}\n\
+             Time: {}\n\
              Transactions:\n\
              - Create: {}\n\
              - Swap In: {} (amount: {})\n\
              - Swap Out: {} (amount: {})\n\
              Jito Tips Paid: {}\n",
             self.transactions.1.from_mint,
-            formatted_profit,
+            profit,
             self.attacker,
             self.victim.as_ref().unwrap_or(&String::from("Unknown")),
             self.transactions.0.slot,
+            time_str,
             self.transactions.0.signature,
             self.transactions.1.signature,
             self.transactions.1.from_amount,
@@ -214,7 +220,7 @@ impl Pattern {
     }
 }
 
-/// Tracks potential sandwich attacks in progress
+// Tracks potential sandwich attacks in progress
 #[derive(Default)]
 pub struct PatternTracker {
     // Map of sandwich_acc -> create transaction
@@ -233,19 +239,20 @@ impl PatternTracker {
     pub fn process_transaction(&mut self, tx: ClassifiedTransaction) {
         match tx.instruction_type.as_str() {
             "CreateSandwichV2" => {
+                // Store create transaction indexed by sandwich account
                 self.open_positions.insert(tx.sandwich_acc.clone(), tx);
             }
             "AutoSwapIn" => {
+                // If we find a matching create transaction, move both to in_progress
                 if let Some(create_tx) = self.open_positions.remove(&tx.sandwich_acc) {
                     self.in_progress.insert(tx.sandwich_acc.clone(), (create_tx, tx));
                 }
             }
             "AutoSwapOut" => {
+                // If we find matching in_progress transactions, try to create a pattern
                 if let Some((create_tx, swap_in_tx)) = self.in_progress.remove(&tx.sandwich_acc) {
                     if let Some(pattern) = Pattern::new(create_tx, swap_in_tx, tx) {
-                        if pattern.is_profitable() {
-                            self.completed.push(pattern);
-                        }
+                        self.completed.push(pattern);
                     }
                 }
             }

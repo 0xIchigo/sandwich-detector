@@ -19,7 +19,7 @@ use solana_transaction_status::{
 };
 
 use sandwich_detector::types::{
-    get_instruction_map, ClassifiedTransaction, PatternTracker, SwapInfo, JITO_TIP_ADDRESSES, MIN_JITO_TIP,
+    get_instruction_map, ClassifiedTransaction, Pattern, PatternTracker, SwapInfo, JITO_TIP_ADDRESSES, MIN_JITO_TIP,
     TARGET_PROGRAM,
 };
 
@@ -323,13 +323,11 @@ fn is_transaction_successful(meta: &UiTransactionStatusMeta) -> bool {
 }
 
 // Checks if an address is a Jito tip address
-#[allow(dead_code)]
 fn is_jito_tip_address(addr: &str) -> bool {
     JITO_TIP_ADDRESSES.contains(&addr)
 }
 
 // Checks Jito tups by comparing pre- and post-balances
-#[allow(dead_code)]
 fn detect_jito_tip(account_keys: &[Pubkey], pre_balances: &[u64], post_balances: &[u64]) -> u64 {
     let mut total_tip: u64 = 0;
 
@@ -349,6 +347,7 @@ fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
     if let Some(transactions) = &block.transactions {
         let mut pattern_tracker: PatternTracker = PatternTracker::new();
 
+        // Filter for non-vote transactions
         let non_vote_txs: Vec<&EncodedTransactionWithStatusMeta> = transactions
             .iter()
             .filter(|tx| {
@@ -358,13 +357,11 @@ fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
                     }
 
                     let logs: Option<Vec<String>> = meta.log_messages.clone().into();
-
                     if let Some(logs) = logs {
                         let is_vote = logs
                             .iter()
                             .any(|log| log.contains("Vote111111111111111111111111111111111111111"));
                         let has_target = logs.iter().any(|log| log.contains(TARGET_PROGRAM));
-
                         !is_vote && has_target
                     } else {
                         false
@@ -378,39 +375,28 @@ fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
         let slot: u64 = block.block_height.unwrap_or(0);
         let block_time: Option<u64> = block.block_time.map(|x| x as u64);
 
-        // Process all transactions
         for tx in non_vote_txs {
-            let classified_txs = find_known_instruction(tx, slot, block_time);
+            let classified_txs: Vec<ClassifiedTransaction> = find_known_instruction(tx, slot, block_time);
 
             for classified_tx in classified_txs {
-                // Print individual transaction
-                println!("Transaction detected:");
-                println!("{}", serde_json::to_string_pretty(&classified_tx).unwrap());
-
-                // Add to pattern tracker
                 pattern_tracker.process_transaction(classified_tx);
             }
         }
 
-        // Print completed patterns
-        let completed_patterns = pattern_tracker.get_completed_patterns();
-        if !completed_patterns.is_empty() {
-            println!("\nFound {} sandwich patterns in this block:", completed_patterns.len());
+        let completed_patterns: &[Pattern] = pattern_tracker.get_completed_patterns();
 
-            for (i, pattern) in completed_patterns.iter().enumerate() {
-                println!("\nPattern {}:", i + 1);
-                println!("Token: {}", pattern.token);
-                println!("Attacker: {}", pattern.attacker);
-                if let Some(victim) = &pattern.victim {
-                    println!("Victim: {}", victim);
-                }
-                println!("Create TX: {}", pattern.transactions.0.signature);
-                println!("Swap In TX: {}", pattern.transactions.1.signature);
-                println!("Swap Out TX: {}", pattern.transactions.2.signature);
+        if !completed_patterns.is_empty() {
+            println!(
+                "\n=== Found {} sandwich patterns in block {} ===\n",
+                completed_patterns.len(),
+                slot
+            );
+
+            for pattern in completed_patterns {
+                println!("{}", pattern.to_summary());
+                println!("---");
             }
         }
-    } else {
-        println!("No transactions found in this block");
     }
 
     Ok(())
