@@ -106,8 +106,6 @@ fn find_known_instruction(
             let discriminator_bytes: &[u8] = &ix.data[0..8];
             let hex_data: String = encode(discriminator_bytes);
 
-            println!("HEX: {}", hex_data);
-
             // Check if we've already processed this instruction type
             if processed_types.contains(&hex_data) {
                 continue;
@@ -115,8 +113,6 @@ fn find_known_instruction(
 
             // Check if the discriminator matches any known instruction
             if let Some(name) = instruction_map.get(hex_data.as_str()) {
-                println!("NAME: {}", name);
-
                 processed_types.insert(hex_data);
 
                 let mut sandwich_acc: String = String::new();
@@ -146,7 +142,7 @@ fn find_known_instruction(
                     _ => {}
                 }
 
-                let classified_tx = if let Some(swap_info) =
+                let classified_tx: ClassifiedTransaction = if let Some(swap_info) =
                     find_token_accounts(ix.clone(), &account_keys, pre_token_balances, post_token_balances)
                 {
                     ClassifiedTransaction {
@@ -202,23 +198,14 @@ fn find_token_accounts(
         .iter()
         .filter_map(|&idx| {
             let account_idx = idx as usize;
+
             if account_idx < account_keys.len() {
                 Some(account_idx)
             } else {
-                println!("Index {} is out of bounds", idx);
                 None
             }
         })
         .collect();
-
-    println!("Instruction accounts:");
-    for &idx in &ix.accounts {
-        if (idx as usize) < account_keys.len() {
-            println!("Index {}: {}", idx, account_keys[idx as usize]);
-        } else {
-            println!("Index {} is out of bounds", idx);
-        }
-    }
 
     // Create maps for pre and post balances
     let pre_map: HashMap<usize, &UiTransactionTokenBalance> = pre_token_balances
@@ -232,22 +219,6 @@ fn find_token_accounts(
         .filter(|b| relevant_accounts.contains(&(b.account_index as usize)))
         .map(|b| (b.account_index as usize, b))
         .collect();
-
-    println!("Relevant pre token balances:");
-    for balance in pre_map.values() {
-        println!(
-            "Account idx: {}, Mint: {}, Amount: {}, Owner: {:?}",
-            balance.account_index, balance.mint, balance.ui_token_amount.amount, balance.owner
-        );
-    }
-
-    println!("Relevant post token balances:");
-    for balance in post_map.values() {
-        println!(
-            "Account idx: {}, Mint: {}, Amount: {}, Owner: {:?}",
-            balance.account_index, balance.mint, balance.ui_token_amount.amount, balance.owner
-        );
-    }
 
     // Track changes for each mint and account, using String instead of f64 for amount calculations
     let mut mint_changes: HashMap<String, Vec<(String, usize)>> = HashMap::new();
