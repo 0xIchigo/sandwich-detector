@@ -42,10 +42,31 @@ pub struct ClassifiedTransaction {
     pub block_time: Option<u64>,
     pub instruction_type: String,
     pub sandwich_acc: String,
+    pub swapper: String,
     pub from_mint: String,
     pub to_mint: String,
     pub from_amount: u64,
     pub to_amount: u64,
+    pub jito_tip_amount: u64,
+}
+
+impl ClassifiedTransaction {
+    pub fn new() -> Self {
+        ClassifiedTransaction {
+            signature: String::new(),
+            signer: String::new(),
+            slot: 0,
+            block_time: None,
+            instruction_type: String::new(),
+            sandwich_acc: String::new(),
+            swapper: String::new(),
+            from_mint: String::new(),
+            to_mint: String::new(),
+            from_amount: 0,
+            to_amount: 0,
+            jito_tip_amount: 0,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -54,4 +75,25 @@ pub struct Pattern {
     pub attacker: String,
     pub victim: Option<String>,
     pub transactions: (ClassifiedTransaction, ClassifiedTransaction, ClassifiedTransaction),
+}
+
+#[derive(Debug, Serialize)]
+pub struct SwapInfo {
+    pub swapper: String,
+    pub from_mint: String,
+    pub to_mint: String,
+    pub from_amount: u64,
+    pub to_amount: u64,
+}
+
+impl SwapInfo {
+    pub fn new() -> Self {
+        SwapInfo {
+            swapper: String::new(),
+            from_mint: String::new(),
+            to_mint: String::new(),
+            from_amount: 0,
+            to_amount: 0,
+        }
+    }
 }

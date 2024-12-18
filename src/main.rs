@@ -1,5 +1,8 @@
 use dotenv::dotenv;
-use std::{collections::HashMap, env};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+};
 
 use helius::error::Result;
 use helius::types::Cluster;
@@ -7,14 +10,16 @@ use helius::Helius;
 
 use hex::encode;
 use solana_client::rpc_config::RpcBlockConfig;
-use solana_sdk::{message::VersionedMessage, pubkey::Pubkey, transaction::VersionedTransaction};
+use solana_sdk::{
+    instruction::CompiledInstruction, message::VersionedMessage, pubkey::Pubkey, transaction::VersionedTransaction,
+};
 use solana_transaction_status::{
     EncodedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock, UiTransactionEncoding,
-    UiTransactionStatusMeta,
+    UiTransactionStatusMeta, UiTransactionTokenBalance,
 };
 
 use sandwich_detector::types::{
-    get_instruction_map, ClassifiedTransaction, JITO_TIP_ADDRESSES, MIN_JITO_TIP, TARGET_PROGRAM,
+    get_instruction_map, ClassifiedTransaction, SwapInfo, JITO_TIP_ADDRESSES, MIN_JITO_TIP, TARGET_PROGRAM,
 };
 
 #[tokio::main]
@@ -27,7 +32,7 @@ async fn main() -> Result<()> {
     let helius: Helius = Helius::new(&api_key, cluster).unwrap();
     println!("Successfully created a Helius client");
 
-    let recent_blocks: Vec<UiConfirmedBlock> = get_recent_blocks(&helius, 5).await?;
+    let recent_blocks: Vec<UiConfirmedBlock> = get_recent_blocks(&helius, 1).await?;
     println!("Analyzing {} blocks", recent_blocks.len());
 
     for (i, block) in recent_blocks.iter().enumerate() {
@@ -50,6 +55,8 @@ fn find_known_instruction(
     };
 
     let instruction_map: HashMap<&str, &str> = get_instruction_map();
+    let mut found_txs: Vec<ClassifiedTransaction> = Vec::new();
+    let mut processed_types: HashSet<String> = HashSet::new();
 
     let (account_keys, instructions) = match &versioned_tx.message {
         VersionedMessage::Legacy(msg) => (msg.account_keys.clone(), msg.instructions.clone()),
@@ -73,7 +80,21 @@ fn find_known_instruction(
     };
 
     let target_program_idx: Option<usize> = account_keys.iter().position(|key| key.to_string() == TARGET_PROGRAM);
-    let mut found_txs = Vec::new();
+
+    let pre_token_balances: &[UiTransactionTokenBalance] = match &tx_with_meta.meta {
+        Some(meta) => meta.pre_token_balances.as_ref().map(|v| v.as_slice()).unwrap_or(&[]),
+        None => &[],
+    };
+
+    let post_token_balances: &[UiTransactionTokenBalance] = match &tx_with_meta.meta {
+        Some(meta) => meta.post_token_balances.as_ref().map(|v| v.as_slice()).unwrap_or(&[]),
+        None => &[],
+    };
+
+    let jito_tip_amount: u64 = match &tx_with_meta.meta {
+        Some(meta) => detect_jito_tip(&account_keys, &meta.pre_balances, &meta.post_balances),
+        None => 0,
+    };
 
     for ix in &instructions {
         if ix.program_id_index as usize == target_program_idx.unwrap_or_default() {
@@ -85,13 +106,20 @@ fn find_known_instruction(
             let discriminator_bytes: &[u8] = &ix.data[0..8];
             let hex_data: String = encode(discriminator_bytes);
 
+            println!("HEX: {}", hex_data);
+
+            // Check if we've already processed this instruction type
+            if processed_types.contains(&hex_data) {
+                continue;
+            }
+
+            // Check if the discriminator matches any known instruction
             if let Some(name) = instruction_map.get(hex_data.as_str()) {
-                // Setting to default values for now
-                let mut sandwich_acc: String = "".to_string();
-                let from_mint: String = "".to_string();
-                let to_mint: String = "".to_string();
-                let from_amount: u64 = 0;
-                let to_amount: u64 = 0;
+                println!("NAME: {}", name);
+
+                processed_types.insert(hex_data);
+
+                let mut sandwich_acc: String = String::new();
 
                 match *name {
                     "CreateSandwichV2" => {
@@ -100,28 +128,56 @@ fn find_known_instruction(
                         }
                     }
                     "AutoSwapIn" | "AutoSwapOut" => {
-                        if ix.accounts.len() > 6 {
-                            sandwich_acc = account_keys[ix.accounts[6] as usize].to_string();
-                        } else if ix.accounts.len() > 7 {
-                            sandwich_acc = account_keys[ix.accounts[7] as usize].to_string();
+                        let sandwich_acc_indices: [usize; 2] = [6, 7];
+
+                        for &idx in &sandwich_acc_indices {
+                            if idx < ix.accounts.len() {
+                                let account_idx: usize = ix.accounts[idx] as usize;
+
+                                if account_idx < account_keys.len() {
+                                    // Additional check for the actual program account pattern
+                                    let account: &Pubkey = &account_keys[account_idx];
+                                    sandwich_acc = account.to_string();
+                                    break; // Take the first valid match
+                                }
+                            }
                         }
                     }
-                    // Decode the to/from mints here
-                    // For now, we'll leave it empty
                     _ => {}
                 }
 
-                let classified_tx: ClassifiedTransaction = ClassifiedTransaction {
-                    signature: signature.clone(),
-                    signer: signer.clone(),
-                    slot,
-                    block_time,
-                    instruction_type: name.to_string(),
-                    sandwich_acc,
-                    from_mint,
-                    to_mint,
-                    from_amount,
-                    to_amount,
+                let classified_tx = if let Some(swap_info) =
+                    find_token_accounts(ix.clone(), &account_keys, pre_token_balances, post_token_balances)
+                {
+                    ClassifiedTransaction {
+                        signature: signature.clone(),
+                        signer: signer.clone(),
+                        slot,
+                        block_time,
+                        instruction_type: name.to_string(),
+                        sandwich_acc,
+                        swapper: swap_info.swapper,
+                        from_mint: swap_info.from_mint,
+                        to_mint: swap_info.to_mint,
+                        from_amount: swap_info.from_amount,
+                        to_amount: swap_info.to_amount,
+                        jito_tip_amount,
+                    }
+                } else {
+                    ClassifiedTransaction {
+                        signature: signature.clone(),
+                        signer: signer.clone(),
+                        slot,
+                        block_time,
+                        instruction_type: name.to_string(),
+                        sandwich_acc,
+                        swapper: String::new(),
+                        from_mint: String::new(),
+                        to_mint: String::new(),
+                        from_amount: 0,
+                        to_amount: 0,
+                        jito_tip_amount,
+                    }
                 };
 
                 found_txs.push(classified_tx);
@@ -132,6 +188,136 @@ fn find_known_instruction(
     found_txs
 }
 
+fn find_token_accounts(
+    ix: CompiledInstruction,
+    account_keys: &[Pubkey],
+    pre_token_balances: &[UiTransactionTokenBalance],
+    post_token_balances: &[UiTransactionTokenBalance],
+) -> Option<SwapInfo> {
+    let mut swap_info: SwapInfo = SwapInfo::new();
+
+    // Get the indices of accounts involved in the instruction, filtering out duplicates
+    let relevant_accounts: HashSet<usize> = ix
+        .accounts
+        .iter()
+        .filter_map(|&idx| {
+            let account_idx = idx as usize;
+            if account_idx < account_keys.len() {
+                Some(account_idx)
+            } else {
+                println!("Index {} is out of bounds", idx);
+                None
+            }
+        })
+        .collect();
+
+    println!("Instruction accounts:");
+    for &idx in &ix.accounts {
+        if (idx as usize) < account_keys.len() {
+            println!("Index {}: {}", idx, account_keys[idx as usize]);
+        } else {
+            println!("Index {} is out of bounds", idx);
+        }
+    }
+
+    // Create maps for pre and post balances
+    let pre_map: HashMap<usize, &UiTransactionTokenBalance> = pre_token_balances
+        .iter()
+        .filter(|b| relevant_accounts.contains(&(b.account_index as usize)))
+        .map(|b| (b.account_index as usize, b))
+        .collect();
+
+    let post_map: HashMap<usize, &UiTransactionTokenBalance> = post_token_balances
+        .iter()
+        .filter(|b| relevant_accounts.contains(&(b.account_index as usize)))
+        .map(|b| (b.account_index as usize, b))
+        .collect();
+
+    println!("Relevant pre token balances:");
+    for balance in pre_map.values() {
+        println!(
+            "Account idx: {}, Mint: {}, Amount: {}, Owner: {:?}",
+            balance.account_index, balance.mint, balance.ui_token_amount.amount, balance.owner
+        );
+    }
+
+    println!("Relevant post token balances:");
+    for balance in post_map.values() {
+        println!(
+            "Account idx: {}, Mint: {}, Amount: {}, Owner: {:?}",
+            balance.account_index, balance.mint, balance.ui_token_amount.amount, balance.owner
+        );
+    }
+
+    // Track changes for each mint and account, using String instead of f64 for amount calculations
+    let mut mint_changes: HashMap<String, Vec<(String, usize)>> = HashMap::new();
+
+    // Compare pre and post balances
+    for (idx, pre_balance) in pre_map.iter() {
+        if let Some(post_balance) = post_map.get(idx) {
+            let pre_amount = &pre_balance.ui_token_amount.amount;
+            let post_amount = &post_balance.ui_token_amount.amount;
+
+            // Calculate difference while keeping amounts as strings
+            let diff =
+                (post_amount.parse::<f64>().unwrap_or(0.0) - pre_amount.parse::<f64>().unwrap_or(0.0)).to_string();
+
+            if diff.parse::<f64>().unwrap_or(0.0) != 0.0 {
+                mint_changes
+                    .entry(pre_balance.mint.clone())
+                    .or_default()
+                    .push((diff, *idx));
+            }
+        }
+    }
+
+    // Find the most significant changes
+    let mut largest_decrease = (String::from("0"), String::new(), 0usize);
+    let mut largest_increase = (String::from("0"), String::new(), 0usize);
+
+    for (mint, changes) in mint_changes {
+        for (diff_str, idx) in changes {
+            let diff = diff_str.parse::<f64>().unwrap_or(0.0);
+
+            if diff < 0.0 && diff < largest_decrease.0.parse::<f64>().unwrap_or(0.0) {
+                largest_decrease = (diff_str.clone(), mint.clone(), idx);
+            } else if diff > 0.0 && diff > largest_increase.0.parse::<f64>().unwrap_or(0.0) {
+                largest_increase = (diff_str, mint.clone(), idx);
+            }
+        }
+    }
+
+    // Only process if we found both a decrease and increase
+    if !largest_decrease.1.is_empty() && !largest_increase.1.is_empty() {
+        // Get the decimals from the pre balance
+        let decimals = pre_map
+            .get(&largest_decrease.2)
+            .map(|b| b.ui_token_amount.decimals)
+            .unwrap_or(0);
+
+        let decrease_amount =
+            (largest_decrease.0.parse::<f64>().unwrap_or(0.0).abs() * 10f64.powi(decimals as i32)) as u64;
+        let increase_amount = (largest_increase.0.parse::<f64>().unwrap_or(0.0) * 10f64.powi(decimals as i32)) as u64;
+
+        swap_info.from_mint = largest_decrease.1;
+        swap_info.from_amount = decrease_amount;
+        swap_info.to_mint = largest_increase.1;
+        swap_info.to_amount = increase_amount;
+
+        // Try to identify the swapper from the instruction context
+        if let Some(pre_balance) = pre_map.get(&largest_decrease.2) {
+            if let Some(owner) = &pre_balance.owner.as_ref().map(|s| s.as_str()) {
+                swap_info.swapper = owner.to_string();
+            }
+        }
+
+        Some(swap_info)
+    } else {
+        None
+    }
+}
+
+// Fetches num_blocks recent blocks
 async fn get_recent_blocks(helius: &Helius, num_blocks: u64) -> Result<Vec<UiConfirmedBlock>> {
     let current_slot: u64 = helius.connection().get_slot()?;
     let mut blocks: Vec<UiConfirmedBlock> = Vec::new();
@@ -219,15 +405,16 @@ fn analyze_non_vote_transactions(block: &UiConfirmedBlock) -> Result<()> {
         let slot: u64 = block.block_height.unwrap_or(0);
         let block_time: Option<u64> = block.block_time.map(|x| x as u64);
 
-        for (_i, tx) in non_vote_txs.iter().enumerate() {
+        for tx in non_vote_txs {
             let classified_txs: Vec<ClassifiedTransaction> = find_known_instruction(tx, slot, block_time);
-            for classified_tx in classified_txs {
-                // println!(
-                //     "Found known instruction: {} with sandwich_acc: {}",
-                //     classified_tx.instruction_type, classified_tx.sandwich_acc
-                // );
+
+            for classified_tx in &classified_txs {
+                // Print the classified transaction as pretty JSON
                 println!("{}", serde_json::to_string_pretty(&classified_tx).unwrap());
-                println!("Sus transaction: {}", serde_json::to_string_pretty(&tx).unwrap());
+                // If a Jito tip was detected, print it
+                if classified_tx.jito_tip_amount > 0 {
+                    //println!("Jito tip detected: {} lamports", classified_tx.jito_tip_amount);
+                }
             }
         }
     } else {
