@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 pub const MIN_JITO_TIP: u64 = 1000;
 pub const TARGET_PROGRAM: &str = "vpeNALD89BZ4KxNUFjdLmFXBCwtyqBDQ85ouNoax38b";
+pub const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
 
 pub const JITO_TIP_ADDRESSES: [&str; 8] = [
     "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
@@ -39,7 +40,7 @@ pub fn get_instruction_map() -> HashMap<&'static str, &'static str> {
 pub struct ClassifiedTransaction {
     pub signature: String,
     pub signer: String,
-    pub slot: u64,
+    pub block_height: u64,
     pub block_time: Option<u64>,
     pub instruction_type: String,
     pub sandwich_acc: String,
@@ -49,6 +50,9 @@ pub struct ClassifiedTransaction {
     pub from_amount: u64,
     pub to_amount: u64,
     pub jito_tip_amount: u64,
+    pub wsol_change: Option<f64>,
+    pub lamport_change: i64,
+    pub decimals: u8,
 }
 
 impl ClassifiedTransaction {
@@ -56,7 +60,7 @@ impl ClassifiedTransaction {
         ClassifiedTransaction {
             signature: String::new(),
             signer: String::new(),
-            slot: 0,
+            block_height: 0,
             block_time: None,
             instruction_type: String::new(),
             sandwich_acc: String::new(),
@@ -66,6 +70,9 @@ impl ClassifiedTransaction {
             from_amount: 0,
             to_amount: 0,
             jito_tip_amount: 0,
+            wsol_change: None,
+            lamport_change: 0,
+            decimals: 9, // Default to 9
         }
     }
 }
@@ -77,6 +84,8 @@ pub struct SwapInfo {
     pub to_mint: String,
     pub from_amount: u64,
     pub to_amount: u64,
+    pub wsol_change: Option<f64>,
+    pub decimals: u8,
 }
 
 impl SwapInfo {
@@ -87,6 +96,8 @@ impl SwapInfo {
             to_mint: String::new(),
             from_amount: 0,
             to_amount: 0,
+            wsol_change: None,
+            decimals: 9, // Default to 9
         }
     }
 }
@@ -144,7 +155,7 @@ impl Pattern {
         swap_out.from_amount > swap_in.from_amount
     }
 
-    /// Returns true if this is a complete and valid sandwich attack pattern
+    // Returns true if this is a complete and valid sandwich attack pattern
     pub fn is_valid(&self) -> bool {
         let (create_tx, swap_in_tx, swap_out_tx) = &self.transactions;
 
@@ -154,7 +165,7 @@ impl Pattern {
         }
 
         // Validate transaction sequence is in the same block
-        if create_tx.slot != swap_in_tx.slot || swap_in_tx.slot != swap_out_tx.slot {
+        if create_tx.block_height != swap_in_tx.block_height || swap_in_tx.block_height != swap_out_tx.block_height {
             return false;
         }
 
@@ -166,8 +177,8 @@ impl Pattern {
         true
     }
 
-    // Returns the profit amount (positive means profitable)
-    pub fn get_profit(&self) -> i128 {
+    // Returns the token profit amount
+    pub fn get_token_profit(&self) -> i128 {
         let (_, swap_in, swap_out) = &self.transactions;
 
         if !self.is_valid() {
@@ -177,10 +188,24 @@ impl Pattern {
         swap_out.from_amount as i128 - swap_in.from_amount as i128
     }
 
+    // Returns the SOL profit including both SOL and wSOL changes
+    pub fn get_sol_profit(&self) -> f64 {
+        let (_, swap_in_tx, swap_out_tx) = &self.transactions;
+
+        let wsol_in: f64 = swap_in_tx.wsol_change.unwrap_or(0.0).abs(); // Positive (amount received)
+        let wsol_out: f64 = swap_out_tx.wsol_change.unwrap_or(0.0).abs(); // Positive (amount sent)
+        let jito_tip: f64 = swap_out_tx.jito_tip_amount as f64 / 1e9;
+        let base_fees: f64 = 0.00001 * 2.0; // 2 base fees for in/out txs
+
+        // Profit = Amount received - Amount sent - Jito tip - Base fees
+        wsol_out - wsol_in - jito_tip - base_fees
+    }
+
     // Returns a formatted string summarizing the pattern
     pub fn to_summary(&self) -> String {
-        let profit: i128 = self.get_profit();
-        let time_str = self
+        let token_profit: i128 = self.get_token_profit();
+        let wsol_profit: f64 = self.get_sol_profit();
+        let time_str: String = self
             .transactions
             .0
             .block_time
@@ -190,14 +215,22 @@ impl Pattern {
                     .unwrap_or_else(|| "Invalid timestamp".to_string())
             })
             .unwrap_or_else(|| "Unknown".to_string());
+        let decimals: i32 = self.transactions.1.decimals.into();
+
+        // Function to format token amounts using correct decimals
+        let format_token_amount = |amount: i128| -> String {
+            let decimal_divisor = 10_f64.powi(decimals as i32);
+            format!("{:.6}", amount as f64 / decimal_divisor)
+        };
 
         format!(
             "Sandwich Attack Pattern:\n\
              Token: {}\n\
-             Profit: {} tokens\n\
+             Token Profit: {} tokens\n\
+             SOL Profit: {:.9} SOL\n\
              Attacker: {}\n\
              Victim: {}\n\
-             Block: {}\n\
+             Block Height: {}\n\
              Time: {}\n\
              Transactions:\n\
              - Create: {}\n\
@@ -205,10 +238,11 @@ impl Pattern {
              - Swap Out: {} (amount: {})\n\
              Jito Tips Paid: {}\n",
             self.transactions.1.from_mint,
-            profit,
+            format_token_amount(token_profit),
+            wsol_profit,
             self.attacker,
             self.victim.as_ref().unwrap_or(&String::from("Unknown")),
-            self.transactions.0.slot,
+            self.transactions.0.block_height,
             time_str,
             self.transactions.0.signature,
             self.transactions.1.signature,
