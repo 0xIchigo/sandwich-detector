@@ -105,7 +105,7 @@ impl SwapInfo {
 pub struct Pattern {
     pub token: String,
     pub attacker: String,
-    pub victim: Option<String>,
+    pub swapper: Option<String>,
     pub transactions: (ClassifiedTransaction, ClassifiedTransaction, ClassifiedTransaction),
 }
 
@@ -138,7 +138,7 @@ impl Pattern {
         Some(Self {
             token,
             attacker: create_tx.signer.clone(),
-            victim: Some(swap_in_tx.swapper.clone()),
+            swapper: Some(swap_in_tx.swapper.clone()),
             transactions: (create_tx, swap_in_tx, swap_out_tx),
         })
     }
@@ -229,7 +229,7 @@ impl Pattern {
              Token Profit: {} tokens\n\
              SOL Profit: {:.9} SOL\n\
              Attacker: {}\n\
-             Victim: {}\n\
+             Swapper: {}\n\
              Block Height: {}\n\
              Time: {}\n\
              Transactions:\n\
@@ -241,7 +241,7 @@ impl Pattern {
             format_token_amount(token_profit),
             wsol_profit,
             self.attacker,
-            self.victim.as_ref().unwrap_or(&String::from("Unknown")),
+            self.swapper.as_ref().unwrap_or(&String::from("Unknown")),
             self.transactions.0.block_height,
             time_str,
             self.transactions.0.signature,
